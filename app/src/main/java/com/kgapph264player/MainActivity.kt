@@ -70,8 +70,7 @@ private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {
     matrix.setScale(scaleX, scaleY)
     matrix.postTranslate(dx, dy)
 
-    // 旋转90度，保证竖屏画面方向
-    matrix.postRotate(90f, viewWidth / 2f, viewHeight / 2f)
+   
 
     textureView.setTransform(matrix)
 }
