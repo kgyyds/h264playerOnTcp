@@ -28,11 +28,8 @@ class MainActivity : Activity() {
                 Log.d("H264", "Surface OK")
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
-            }
-
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-            }
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+            override fun surfaceDestroyed(holder: SurfaceHolder) {}
         })
 
         Thread { runTcpServer() }.start()
@@ -57,8 +54,8 @@ class MainActivity : Activity() {
         val buffer = ByteArray(4096)
         val tempBuffer = mutableListOf<Byte>()
 
-        var sps: ByteArray? = null
-        var pps: ByteArray? = null
+        var spsFound = false
+        var ppsFound = false
         var decoderReady = false
 
         try {
@@ -67,25 +64,26 @@ class MainActivity : Activity() {
                 if (r <= 0) break
                 tempBuffer.addAll(buffer.take(r))
 
-                val nalList = parseAnnexB(tempBuffer)
+                val nalList = parseAnnexBWithStartCode(tempBuffer)
                 for (nal in nalList) {
                     val type = nal[0].toInt() and 0x1F
+                    Log.d("H264", "NAL type: $type")
 
-                    if (type == 7) sps = nal
-                    if (type == 8) pps = nal
-
-                    if (!decoderReady && sps != null && pps != null && surface != null) {
-                        codec = MediaCodec.createDecoderByType("video/avc")
-
-                        // ✅ 关键修复：不写死分辨率，让解码器自动识别
-                        val f = MediaFormat.createVideoFormat("video/avc", 0, 0)
-                        f.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
-                        f.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
-
-                        codec!!.configure(f, surface, null, 0)
-                        codec!!.start()
-                        decoderReady = true
-                        Log.d("H264", "✅ Decoder started!!!")
+                    if (!decoderReady) {
+                        if (type == 7) {
+                            spsFound = true
+                        }
+                        if (type == 8) {
+                            ppsFound = true
+                        }
+                        if (spsFound && ppsFound && surface != null) {
+                            codec = MediaCodec.createDecoderByType("video/avc")
+                            val fmt = MediaFormat.createVideoFormat("video/avc", 0, 0)
+                            codec!!.configure(fmt, surface, null, 0)
+                            codec!!.start()
+                            decoderReady = true
+                            Log.d("H264", "✅ DECODER STARTED!!!")
+                        }
                     }
 
                     if (decoderReady) {
@@ -105,9 +103,11 @@ class MainActivity : Activity() {
 
         val buf = c.getInputBuffer(idx)!!
         buf.clear()
-        buf.put(nal)
+        buf.put(nal) // 👈 保留了起始码，关键！
+
         val type = nal[0].toInt() and 0x1F
         val flags = if (type == 5) MediaCodec.BUFFER_FLAG_SYNC_FRAME else 0
+
         c.queueInputBuffer(idx, 0, nal.size, 0, flags)
 
         val info = MediaCodec.BufferInfo()
@@ -118,22 +118,21 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun parseAnnexB(data: MutableList<Byte>): List<ByteArray> {
+    // ✅ 关键修复：保留起始码 00 00 01 / 00 00 00 01
+    private fun parseAnnexBWithStartCode(data: MutableList<Byte>): List<ByteArray> {
         val res = mutableListOf<ByteArray>()
         var i = 0
         val size = data.size
         var last = 0
 
         while (i <= size - 3) {
-            val is4 = (i + 3 < size && data[i] == 0.toByte() && data[i+1] == 0.toByte() && data[i+2] == 0.toByte() && data[i+3] == 1.toByte())
-            val is3 = (i + 2 < size && data[i] == 0.toByte() && data[i+1] == 0.toByte() && data[i+2] == 1.toByte())
+            val is4 = (i+3 < size && data[i]==0.toByte() && data[i+1]==0.toByte() && data[i+2]==0.toByte() && data[i+3]==1.toByte())
+            val is3 = (i+2 < size && data[i]==0.toByte() && data[i+1]==0.toByte() && data[i+2]==1.toByte())
 
             if (is4 || is3) {
-                if (last < i) {
-                    val chunk = data.subList(last, i).toByteArray()
-                    if (chunk.isNotEmpty()) {
-                        res.add(chunk)
-                    }
+                if (i > last) {
+                    val unit = data.subList(last, i).toByteArray()
+                    res.add(unit)
                 }
                 last = i
                 i += if (is4) 4 else 3
@@ -142,7 +141,7 @@ class MainActivity : Activity() {
             }
         }
 
-        val left = data.subList(last, data.size).toByteArray()
+        val left = data.subList(last, size).toByteArray()
         data.clear()
         data.addAll(left.toList())
         return res
