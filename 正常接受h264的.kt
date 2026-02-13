@@ -1,65 +1,50 @@
 package com.kgapph264player
 
 import android.app.Activity
-import android.graphics.Matrix
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Bundle
 import android.util.Log
-import android.view.TextureView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import java.io.BufferedInputStream
 import java.net.ServerSocket
+import java.nio.ByteBuffer
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-
     companion object {
         private const val TAG = "H264SocketPlayer"
         private const val PORT = 40001
-        private const val VIDEO_WIDTH = 1080   // screenrecord 默认横屏宽
-        private const val VIDEO_HEIGHT = 2400  // screenrecord 默认竖屏高
     }
 
-    private lateinit var textureView: TextureView
+    private lateinit var surfaceView: SurfaceView
     private var codec: MediaCodec? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        textureView = TextureView(this)
-        setContentView(textureView)
-
-        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
-                // 设置显示矩阵，保持比例
-                applyTextureTransform(width, height)
-                // 启动监听推流
-                startServer()
+        surfaceView = SurfaceView(this)
+        setContentView(surfaceView)
+        
+        surfaceView.rotation = 90f //旋转
+        
+        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                startServer(holder)
             }
-            override fun onSurfaceTextureSizeChanged(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
-            override fun onSurfaceTextureDestroyed(surfaceTexture: android.graphics.SurfaceTexture): Boolean = true
-            override fun onSurfaceTextureUpdated(surfaceTexture: android.graphics.SurfaceTexture) {}
-        }
+
+            override fun surfaceChanged(
+                holder: SurfaceHolder,
+                format: Int,
+                width: Int,
+                height: Int
+            ) { }
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) { }
+        })
     }
 
-    private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {
-        val matrix = Matrix()
-
-        // 计算缩放比例，保持视频宽高比
-        val scaleX = viewWidth.toFloat() / VIDEO_WIDTH
-        val scaleY = viewHeight.toFloat() / VIDEO_HEIGHT
-        val scale = Math.min(scaleX, scaleY)
-
-        val dx = (viewWidth - VIDEO_WIDTH * scale) / 2f
-        val dy = (viewHeight - VIDEO_HEIGHT * scale) / 2f
-
-        matrix.setScale(scale, scale)
-        matrix.postTranslate(dx, dy)
-
-        textureView.setTransform(matrix)
-    }
-
-    private fun startServer() {
+    private fun startServer(holder: SurfaceHolder) {
         Executors.newSingleThreadExecutor().execute {
             try {
                 val server = ServerSocket(PORT)
@@ -68,27 +53,33 @@ class MainActivity : Activity() {
                 Log.i(TAG, "Client connected")
 
                 val input = BufferedInputStream(socket.getInputStream())
-                // 初始化 MediaCodec
-                initDecoder()
 
+                // 解码器初始化
+                initDecoder(holder)
+
+                // 缓冲池
                 val buffer = ByteArray(200 * 1024)
                 val streamBuffer = ByteArray(500 * 1024)
                 var streamLen = 0
+
                 var ptsUs = 0L
 
                 while (true) {
                     val read = input.read(buffer)
                     if (read <= 0) break
 
+                    // 叠加到流缓存
                     System.arraycopy(buffer, 0, streamBuffer, streamLen, read)
                     streamLen += read
 
+                    // 找 start code
                     var offset = 0
                     while (offset + 4 < streamLen) {
                         if (streamBuffer[offset] == 0.toByte()
                             && streamBuffer[offset + 1] == 0.toByte()
                             && streamBuffer[offset + 2] == 1.toByte()
                         ) {
+                            // 找到 start code, 寻找下一个
                             var next = offset + 3
                             var foundNext = false
                             while (next + 3 < streamLen) {
@@ -121,10 +112,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun initDecoder() {
-        val format = MediaFormat.createVideoFormat("video/avc", VIDEO_WIDTH, VIDEO_HEIGHT)
+    private fun initDecoder(holder: SurfaceHolder) {
+        // MIME + 你期望的宽高
+        val format = MediaFormat.createVideoFormat("video/avc", 1080, 2400)
+
         codec = MediaCodec.createDecoderByType("video/avc")
-        codec?.configure(format, android.view.Surface(textureView.surfaceTexture), null, 0)
+        codec?.configure(format, holder.surface, null, 0)
         codec?.start()
     }
 
@@ -134,7 +127,13 @@ class MainActivity : Activity() {
             val buffer = codec!!.getInputBuffer(inputBufferId)!!
             buffer.clear()
             buffer.put(data, offset, len)
-            codec!!.queueInputBuffer(inputBufferId, 0, len, pts * 1000, 0)
+            codec!!.queueInputBuffer(
+                inputBufferId,
+                0,
+                len,
+                pts * 1000,
+                0
+            )
         }
 
         val info = MediaCodec.BufferInfo()
