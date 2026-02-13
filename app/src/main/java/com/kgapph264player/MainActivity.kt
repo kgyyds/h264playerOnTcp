@@ -25,7 +25,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         surfaceView = SurfaceView(this)
         setContentView(surfaceView)
-
+        
+        surfaceView.rotation = 90f //旋转
+        
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 startServer(holder)
