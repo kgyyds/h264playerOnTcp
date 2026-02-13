@@ -1,12 +1,16 @@
 package com.kgapph264player
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Matrix
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Bundle
+import android.text.InputType
 import android.util.Log
 import android.view.TextureView
+import android.widget.EditText
+import android.widget.LinearLayout
 import java.io.BufferedInputStream
 import java.net.ServerSocket
 import java.util.concurrent.Executors
@@ -16,12 +20,12 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "H264SocketPlayer"
         private const val PORT = 40001
-        private const val VIDEO_WIDTH = 1080   // screenrecord 默认横屏宽
-        private const val VIDEO_HEIGHT = 2400  // screenrecord 默认竖屏高
     }
 
     private lateinit var textureView: TextureView
     private var codec: MediaCodec? = null
+    private var videoWidth = 1080
+    private var videoHeight = 2400
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,29 +33,60 @@ class MainActivity : Activity() {
         textureView = TextureView(this)
         setContentView(textureView)
 
-        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
-                // 设置显示矩阵，保持比例
-                applyTextureTransform(width, height)
-                // 启动监听推流
-                startServer()
+        // 弹窗输入宽高
+        showInputDialog()
+    }
+
+    private fun showInputDialog() {
+        val layout = LinearLayout(this)
+        layout.orientation = LinearLayout.VERTICAL
+
+        val widthInput = EditText(this)
+        widthInput.hint = "Video Width"
+        widthInput.inputType = InputType.TYPE_CLASS_NUMBER
+        val heightInput = EditText(this)
+        heightInput.hint = "Video Height"
+        heightInput.inputType = InputType.TYPE_CLASS_NUMBER
+
+        layout.addView(widthInput)
+        layout.addView(heightInput)
+
+        AlertDialog.Builder(this)
+            .setTitle("Enter Video Resolution")
+            .setView(layout)
+            .setCancelable(false)
+            .setPositiveButton("OK") { _, _ ->
+                try {
+                    videoWidth = widthInput.text.toString().toInt()
+                    videoHeight = heightInput.text.toString().toInt()
+                } catch (e: Exception) {
+                    videoWidth = 1080
+                    videoHeight = 2400
+                }
+                // 设置显示矩阵并开始推流监听
+                textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
+                        applyTextureTransform(width, height)
+                        startServer()
+                    }
+                    override fun onSurfaceTextureSizeChanged(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+                    override fun onSurfaceTextureDestroyed(surfaceTexture: android.graphics.SurfaceTexture): Boolean = true
+                    override fun onSurfaceTextureUpdated(surfaceTexture: android.graphics.SurfaceTexture) {}
+                }
             }
-            override fun onSurfaceTextureSizeChanged(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
-            override fun onSurfaceTextureDestroyed(surfaceTexture: android.graphics.SurfaceTexture): Boolean = true
-            override fun onSurfaceTextureUpdated(surfaceTexture: android.graphics.SurfaceTexture) {}
-        }
+            .show()
     }
 
     private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {
         val matrix = Matrix()
 
         // 计算缩放比例，保持视频宽高比
-        val scaleX = viewWidth.toFloat() / VIDEO_WIDTH
-        val scaleY = viewHeight.toFloat() / VIDEO_HEIGHT
+        val scaleX = viewWidth.toFloat() / videoWidth
+        val scaleY = viewHeight.toFloat() / videoHeight
         val scale = Math.min(scaleX, scaleY)
 
-        val dx = (viewWidth - VIDEO_WIDTH * scale) / 2f
-        val dy = (viewHeight - VIDEO_HEIGHT * scale) / 2f
+        val dx = (viewWidth - videoWidth * scale) / 2f
+        val dy = (viewHeight - videoHeight * scale) / 2f
 
         matrix.setScale(scale, scale)
         matrix.postTranslate(dx, dy)
@@ -68,7 +103,6 @@ class MainActivity : Activity() {
                 Log.i(TAG, "Client connected")
 
                 val input = BufferedInputStream(socket.getInputStream())
-                // 初始化 MediaCodec
                 initDecoder()
 
                 val buffer = ByteArray(200 * 1024)
@@ -109,7 +143,6 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // 剩余尾部
                     if (offset > 0 && offset < streamLen) {
                         System.arraycopy(streamBuffer, offset, streamBuffer, 0, streamLen - offset)
                         streamLen -= offset
@@ -122,7 +155,7 @@ class MainActivity : Activity() {
     }
 
     private fun initDecoder() {
-        val format = MediaFormat.createVideoFormat("video/avc", VIDEO_WIDTH, VIDEO_HEIGHT)
+        val format = MediaFormat.createVideoFormat("video/avc", videoWidth, videoHeight)
         codec = MediaCodec.createDecoderByType("video/avc")
         codec?.configure(format, android.view.Surface(textureView.surfaceTexture), null, 0)
         codec?.start()
