@@ -76,13 +76,16 @@ class MainActivity : Activity() {
 
                     if (!decoderReady && sps != null && pps != null && surface != null) {
                         codec = MediaCodec.createDecoderByType("video/avc")
-                        val f = MediaFormat.createVideoFormat("video/avc", 1920, 1080)
+
+                        // ✅ 关键修复：不写死分辨率，让解码器自动识别
+                        val f = MediaFormat.createVideoFormat("video/avc", 0, 0)
                         f.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
                         f.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
+
                         codec!!.configure(f, surface, null, 0)
                         codec!!.start()
                         decoderReady = true
-                        Log.d("H264", "Decoder started")
+                        Log.d("H264", "✅ Decoder started!!!")
                     }
 
                     if (decoderReady) {
