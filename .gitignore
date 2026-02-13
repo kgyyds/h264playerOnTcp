@@ -1,0 +1,14 @@
+**/build/
+**/.gradle/
+**/.cxx/
+**/.externalNativeBuild/
+*.apk
+*.out
+*.o
+*.so
+*.a
+*.dex
+*.class
+*.jar
+*.aar
+*.bin
