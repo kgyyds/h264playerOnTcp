@@ -27,22 +27,25 @@ class MainActivity : Activity() {
                 surface = holder.surface
                 Log.d("H264", "Surface OK")
             }
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {}
+
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
+            }
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) {
+            }
         })
 
-        // TCP 服务一启动就跑，不依赖 Surface 顺序
         Thread { runTcpServer() }.start()
     }
 
     private fun runTcpServer() {
         val server = ServerSocket(40001)
-        Log.d("H264", "TCP 等待客户端连接 40001...")
+        Log.d("H264", "TCP waiting 40001...")
 
         while (true) {
             try {
                 val client = server.accept()
-                Log.d("H264", "客户端已连接!")
+                Log.d("H264", "Client connected")
                 readStream(client.getInputStream())
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -79,7 +82,7 @@ class MainActivity : Activity() {
                         codec!!.configure(f, surface, null, 0)
                         codec!!.start()
                         decoderReady = true
-                        Log.d("H264", "解码器启动成功")
+                        Log.d("H264", "Decoder started")
                     }
 
                     if (decoderReady) {
@@ -119,13 +122,15 @@ class MainActivity : Activity() {
         var last = 0
 
         while (i <= size - 3) {
-            val is4 = (i+3 < size && data[i]==0.toByte() && data[i+1]==0.toByte() && data[i+2]==0.toByte() && data[i+3]==1.toByte())
-            val is3 = (i+2 < size && data[i]==0.toByte() && data[i+1]==0.toByte() && data[i+2]==1.toByte())
+            val is4 = (i + 3 < size && data[i] == 0.toByte() && data[i+1] == 0.toByte() && data[i+2] == 0.toByte() && data[i+3] == 1.toByte())
+            val is3 = (i + 2 < size && data[i] == 0.toByte() && data[i+1] == 0.toByte() && data[i+2] == 1.toByte())
 
             if (is4 || is3) {
                 if (last < i) {
                     val chunk = data.subList(last, i).toByteArray()
-                    if (chunk.isNotEmpty()) res.add(chunk)
+                    if (chunk.isNotEmpty()) {
+                        res.add(chunk)
+                    }
                 }
                 last = i
                 i += if (is4) 4 else 3
