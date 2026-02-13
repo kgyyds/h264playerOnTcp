@@ -42,39 +42,22 @@ override fun onCreate(savedInstanceState: Bundle?) {
     }  
 }  
 
-private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {
-    val matrix = Matrix()
+private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {  
+    val matrix = Matrix()  
 
-    // 假设视频是竖屏，比例用推流的默认 1:1 参考即可
-    // 这里用 VIDEO_WIDTH / VIDEO_HEIGHT 只是初步比例，不影响缩放
-    val videoAspect = VIDEO_WIDTH.toFloat() / VIDEO_HEIGHT.toFloat()
-    val viewAspect = viewWidth.toFloat() / viewHeight.toFloat()
+    // 计算缩放比例，保持视频宽高比  
+    val scaleX = viewWidth.toFloat() / VIDEO_WIDTH  
+    val scaleY = viewHeight.toFloat() / VIDEO_HEIGHT  
+    val scale = Math.min(scaleX, scaleY)  
 
-    var scaleX = 1f
-    var scaleY = 1f
-    var dx = 0f
-    var dy = 0f
+    val dx = (viewWidth - VIDEO_WIDTH * scale) / 2f  
+    val dy = (viewHeight - VIDEO_HEIGHT * scale) / 2f  
 
-    if (viewAspect > videoAspect) {
-        // 屏幕比视频宽 → 按高度撑满
-        scaleY = viewHeight.toFloat() / VIDEO_HEIGHT
-        scaleX = scaleY
-        dx = (viewWidth - VIDEO_WIDTH * scaleX) / 2f
-    } else {
-        // 屏幕比视频窄 → 按宽度撑满
-        scaleX = viewWidth.toFloat() / VIDEO_WIDTH
-        scaleY = scaleX
-        dy = (viewHeight - VIDEO_HEIGHT * scaleY) / 2f
-    }
+    matrix.setScale(scale, scale)  
+    matrix.postTranslate(dx, dy)  
 
-    matrix.setScale(scaleX, scaleY)
-    matrix.postTranslate(dx, dy)
-
-    // 旋转90度，保证竖屏画面方向
-    matrix.postRotate(90f, viewWidth / 2f, viewHeight / 2f)
-
-    textureView.setTransform(matrix)
-}
+    textureView.setTransform(matrix)  
+}  
 
 private fun startServer() {  
     Executors.newSingleThreadExecutor().execute {  
