@@ -26,7 +26,7 @@ class MainActivity : Activity() {
         textureView = TextureView(this)
         setContentView(textureView)
 
-        // TextureView 准备好后开始监听
+        //TextureView准备好后开始监听 这里准备是的tt线
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                 applyTextureTransform(width, height)
