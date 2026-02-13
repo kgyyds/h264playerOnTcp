@@ -7,7 +7,9 @@
         android:label="H264Player"
         android:allowBackup="true"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
-        <activity android:name=".MainActivity"
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize">
             <intent-filter>
