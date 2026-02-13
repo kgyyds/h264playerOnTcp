@@ -1,5 +1,6 @@
 package com.kgapph264player
 
+import android.app.Activity
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Bundle
@@ -7,7 +8,6 @@ import android.util.Log
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import androidx.appcompat.app.AppCompatActivity
 import java.io.InputStream
 import java.net.ServerSocket
 import java.nio.ByteBuffer
@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CountDownLatch
 import java.io.ByteArrayOutputStream
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private lateinit var surfaceView: SurfaceView
     private var surface: Surface? = null
@@ -25,7 +25,7 @@ class MainActivity : AppCompatActivity() {
     private var pps: ByteArray? = null
     private val pts = AtomicLong(0)
 
-    // 用于等待 Surface 就绪
+    // 等待 Surface 就绪
     private val surfaceLatch = CountDownLatch(1)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,7 +36,7 @@ class MainActivity : AppCompatActivity() {
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 surface = holder.surface
-                surfaceLatch.countDown() // 通知 Surface 已可用
+                surfaceLatch.countDown()
                 Log.d("H264", "Surface created")
             }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 1. TCP 服务：接收数据，提取 SPS/PPS，启动解码器，持续喂帧
+    // 1. TCP 服务线程
     // ------------------------------------------------------------
     private fun serverThread() {
         ServerSocket(40001).use { server ->
@@ -59,14 +59,14 @@ class MainActivity : AppCompatActivity() {
             Log.d("H264", "客户端已连接: ${socket.inetAddress}")
             val input = socket.getInputStream()
 
-            // ----- 阶段1：从流头部提取 SPS 和 PPS -----
+            // ----- 提取 SPS 和 PPS -----
             extractSpsPps(input)
 
-            // ----- 阶段2：Surface 就绪后，初始化解码器（必须 UI 线程）-----
-            surfaceLatch.await() // 等待 Surface 可用
+            // ----- 等待 Surface 就绪，然后初始化解码器（必须在 UI 线程）-----
+            surfaceLatch.await()
             runOnUiThread { initDecoder() }
 
-            // ----- 阶段3：持续读取剩余流，切分 NALU，喂给解码器 -----
+            // ----- 持续接收并喂帧 -----
             val nalParser = NalParser()
             val buffer = ByteArray(8192)
             while (true) {
@@ -80,8 +80,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 2. 从 InputStream 中提取 SPS (nal=7) 和 PPS (nal=8)
-    //    阻塞直到两个参数集都收到
+    // 2. 提取 SPS (nal=7) 和 PPS (nal=8)
     // ------------------------------------------------------------
     private fun extractSpsPps(input: InputStream) {
         val baos = ByteArrayOutputStream()
@@ -95,19 +94,18 @@ class MainActivity : AppCompatActivity() {
             baos.write(buf, 0, len)
             val data = baos.toByteArray()
 
-            // 扫描所有 NALU
             var i = 0
             while (i < data.size - 4) {
-                val startCodeLen = findStartCode(data, i)
-                if (startCodeLen > 0) {
-                    var end = i + startCodeLen
+                val startLen = findStartCode(data, i)
+                if (startLen > 0) {
+                    var end = i + startLen
                     while (end < data.size - 4) {
                         if (findStartCode(data, end) > 0) break
                         end++
                     }
                     if (end > i) {
-                        val nalu = data.copyOfRange(i, end) // 包含起始码
-                        val nalType = nalu[startCodeLen].toInt() and 0x1F
+                        val nalu = data.copyOfRange(i, end)
+                        val nalType = nalu[startLen].toInt() and 0x1F
                         when (nalType) {
                             7 -> { sps = nalu; foundSps = true }
                             8 -> { pps = nalu; foundPps = true }
@@ -116,7 +114,7 @@ class MainActivity : AppCompatActivity() {
                     i = end
                 } else i++
             }
-            // 保留未处理完的数据（可能是不完整的 NALU 尾部）
+            // 保留未处理完的数据
             if (i < data.size) {
                 baos.reset()
                 baos.write(data, i, data.size - i)
@@ -128,7 +126,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 3. 初始化解码器，设置 csd-0（带起始码的 SPS+PPS）
+    // 3. 初始化解码器（必须 UI 线程）
     // ------------------------------------------------------------
     private fun initDecoder() {
         if (sps == null || pps == null) {
@@ -140,11 +138,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 从 SPS 中解析宽高（可选，MediaCodec 会自动解析）
-        // 这里给个默认值，实际运行时会被解码器输出的实际分辨率覆盖
         val format = MediaFormat.createVideoFormat("video/avc", 720, 1280)
-
-        // csd-0 必须包含带起始码的 SPS 和 PPS，拼接即可
+        // csd-0 必须包含带起始码的 SPS+PPS
         val csdBuffer = ByteBuffer.allocate(sps!!.size + pps!!.size)
         csdBuffer.put(sps!!)
         csdBuffer.put(pps!!)
@@ -162,7 +157,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 4. 输出循环（必须与输入分离，否则阻塞）
+    // 4. 输出循环（独立线程）
     // ------------------------------------------------------------
     private fun outputLoop() {
         val info = MediaCodec.BufferInfo()
@@ -172,8 +167,7 @@ class MainActivity : AppCompatActivity() {
                 val outIndex = codec.dequeueOutputBuffer(info, 10000)
                 when {
                     outIndex >= 0 -> {
-                        // 立即渲染
-                        codec.releaseOutputBuffer(outIndex, true)
+                        codec.releaseOutputBuffer(outIndex, true) // 立即渲染
                     }
                     outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val newFormat = codec.outputFormat
@@ -187,7 +181,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 5. 向解码器输入一帧完整 NALU（带起始码）
+    // 5. 喂一帧完整 NALU（带起始码）
     // ------------------------------------------------------------
     private fun feedDecoder(nalu: ByteArray) {
         if (!csdSent) return
@@ -198,7 +192,7 @@ class MainActivity : AppCompatActivity() {
             val inBuf = codec.getInputBuffer(inIdx)!!
             inBuf.clear()
             inBuf.put(nalu)
-            // PTS 必须单调递增，单位微秒，假设 30fps ≈ 33333 us
+            // PTS 单调递增，假设 30fps ≈ 33333 us
             val ptsUs = pts.addAndGet(33333)
             codec.queueInputBuffer(inIdx, 0, nalu.size, ptsUs, 0)
         } catch (e: Exception) {
@@ -207,34 +201,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------
-    // 6. 工具类：流式 NALU 解析器，避免重复扫描
+    // 6. 流式 NALU 解析器
     // ------------------------------------------------------------
     inner class NalParser {
         private val buffer = ByteArrayOutputStream()
-        private var leftover = ByteArray(0)
 
         fun append(data: ByteArray, offset: Int, len: Int, onNalu: (ByteArray) -> Unit) {
             buffer.write(data, offset, len)
             val all = buffer.toByteArray()
-            val result = parseNalus(all, onNalu)
-            // 保留未完整解析的尾部数据
-            if (result < all.size) {
+            val consumed = parseNalus(all, onNalu)
+            if (consumed < all.size) {
                 buffer.reset()
-                buffer.write(all, result, all.size - result)
+                buffer.write(all, consumed, all.size - consumed)
             } else {
                 buffer.reset()
             }
         }
 
-        // 从字节数组中切出完整 NALU，每切出一个调用 onNalu
         private fun parseNalus(data: ByteArray, onNalu: (ByteArray) -> Unit): Int {
             var i = 0
-            val size = data.size
-            while (i < size - 4) {
+            while (i < data.size - 4) {
                 val startLen = findStartCode(data, i)
                 if (startLen > 0) {
                     var end = i + startLen
-                    while (end < size - 4) {
+                    while (end < data.size - 4) {
                         if (findStartCode(data, end) > 0) break
                         end++
                     }
@@ -245,27 +235,33 @@ class MainActivity : AppCompatActivity() {
                     i = end
                 } else i++
             }
-            return i // 返回已处理完的位置
+            return i
         }
     }
 
     // ------------------------------------------------------------
-    // 7. 查找起始码，支持 0x000001 和 0x00000001
+    // 7. 查找起始码（3或4字节）
     // ------------------------------------------------------------
     private fun findStartCode(data: ByteArray, offset: Int): Int {
-        if (offset + 3 > data.size) return 0
-        if (data[offset] == 0x00.toByte() && data[offset + 1] == 0x00.toByte() &&
-            data[offset + 2] == 0x00.toByte() && data[offset + 3] == 0x01.toByte()) {
+        if (offset + 3 <= data.size &&
+            data[offset] == 0x00.toByte() &&
+            data[offset + 1] == 0x00.toByte() &&
+            data[offset + 2] == 0x00.toByte() &&
+            data[offset + 3] == 0x01.toByte()) {
             return 4
         }
-        if (offset + 2 > data.size) return 0
-        if (data[offset] == 0x00.toByte() && data[offset + 1] == 0x00.toByte() &&
+        if (offset + 2 <= data.size &&
+            data[offset] == 0x00.toByte() &&
+            data[offset + 1] == 0x00.toByte() &&
             data[offset + 2] == 0x01.toByte()) {
             return 3
         }
         return 0
     }
 
+    // ------------------------------------------------------------
+    // 8. 释放资源
+    // ------------------------------------------------------------
     override fun onDestroy() {
         super.onDestroy()
         try {
