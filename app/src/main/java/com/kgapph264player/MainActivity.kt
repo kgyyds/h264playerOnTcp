@@ -114,7 +114,7 @@ class MainActivity : Activity() {
 
     private fun initDecoder(holder: SurfaceHolder) {
         // MIME + 你期望的宽高
-        val format = MediaFormat.createVideoFormat("video/avc", 1080, 2400)
+        val format = MediaFormat.createVideoFormat("video/avc", 2400, 1080)
 
         codec = MediaCodec.createDecoderByType("video/avc")
         codec?.configure(format, holder.surface, null, 0)
