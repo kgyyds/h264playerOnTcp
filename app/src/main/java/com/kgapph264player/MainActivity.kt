@@ -22,43 +22,50 @@ class MainActivity : Activity() {
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                // ✅ 先开端口监听
-                Thread { startTcpServer(holder) }.start()
+                Thread { startTcpServer(holder.surface) }.start()
             }
+
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {}
         })
     }
 
-    private fun startTcpServer(holder: SurfaceHolder) {
+    private fun startTcpServer(surface: android.view.Surface) {
         val server = ServerSocket(40001)
-        println("🌐 Listening on port 40001...")
+        println("🌐 Listening on 40001...")
+
         val client = server.accept()
         println("✅ Client connected!")
 
         val input = client.getInputStream()
         val buffer = ByteArray(16 * 1024)
         val nalBuffer = mutableListOf<Byte>()
-        var firstFrame = true
+
+        var sps: ByteArray? = null
+        var pps: ByteArray? = null
+        var decoderStarted = false
 
         try {
             while (true) {
                 val read = input.read(buffer)
                 if (read <= 0) break
+                nalBuffer.addAll(buffer.take(read))
 
-                for (i in 0 until read) nalBuffer.add(buffer[i])
-
-                // 🔹 收到数据就 feed，第一次收到则创建 MediaCodec
-                if (nalBuffer.isNotEmpty()) {
-                    val data = nalBuffer.toByteArray()
-                    if (firstFrame) {
-                        // ⚡ 第一次收到数据，创建 decoder
-                        startDecoder(holder.surface, data)
-                        firstFrame = false
-                    } else {
-                        feedDecoder(data)
+                // 🔹按 0x00000001 分割 NAL 单元
+                val units = extractNALUnits(nalBuffer)
+                for (nal in units) {
+                    val type = nalType(nal)
+                    when (type) {
+                        7 -> sps = nal // SPS
+                        8 -> pps = nal // PPS
+                        else -> {
+                            if (!decoderStarted && sps != null && pps != null) {
+                                startDecoder(surface, sps, pps)
+                                decoderStarted = true
+                            }
+                            if (decoderStarted) feedDecoder(nal)
+                        }
                     }
-                    nalBuffer.clear()
                 }
             }
         } catch (e: Exception) {
@@ -66,17 +73,20 @@ class MainActivity : Activity() {
         } finally {
             client.close()
             server.close()
+            codec?.stop()
+            codec?.release()
             println("🛑 Server closed")
         }
     }
 
-    private fun startDecoder(surface: android.view.Surface, firstData: ByteArray) {
+    private fun startDecoder(surface: android.view.Surface, sps: ByteArray, pps: ByteArray) {
         codec = MediaCodec.createDecoderByType("video/avc")
-        val format = MediaFormat.createVideoFormat("video/avc", 1920, 1080) // 横屏 1080p
+        val format = MediaFormat.createVideoFormat("video/avc", 1080, 1920)
+        format.setByteBuffer("csd-0", ByteBuffer.wrap(sps))
+        format.setByteBuffer("csd-1", ByteBuffer.wrap(pps))
         codec!!.configure(format, surface, null, 0)
         codec!!.start()
         println("🎬 Decoder started")
-        feedDecoder(firstData)
     }
 
     private fun feedDecoder(data: ByteArray) {
@@ -95,6 +105,35 @@ class MainActivity : Activity() {
             c.releaseOutputBuffer(outIndex, true)
             outIndex = c.dequeueOutputBuffer(info, 0)
         }
+    }
+
+    private fun nalType(nal: ByteArray): Int {
+        // 第一个字节就是 nal header: F | NRI | Type
+        if (nal.isEmpty()) return -1
+        return nal[0].toInt() and 0x1F
+    }
+
+    private fun extractNALUnits(buffer: MutableList<Byte>): List<ByteArray> {
+        val units = mutableListOf<ByteArray>()
+        var start = -1
+        var i = 0
+        while (i < buffer.size - 3) {
+            if (buffer[i] == 0.toByte() && buffer[i+1] == 0.toByte() &&
+                buffer[i+2] == 0.toByte() && buffer[i+3] == 1.toByte()) {
+                if (start != -1) {
+                    units.add(buffer.subList(start, i).toByteArray())
+                }
+                start = i + 4
+                i += 4
+            } else i++
+        }
+        // 剩余部分保留
+        if (start != -1) {
+            val remaining = buffer.subList(start, buffer.size).toByteArray()
+            buffer.clear()
+            buffer.addAll(remaining.toList())
+        }
+        return units
     }
 
     override fun onDestroy() {
