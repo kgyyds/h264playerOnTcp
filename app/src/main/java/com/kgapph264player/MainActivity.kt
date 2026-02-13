@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
 class MainActivity : Activity() {
 
     private lateinit var surfaceView: SurfaceView
-    private lateinit var codec: MediaCodec
+    private var codec: MediaCodec? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,32 +20,26 @@ class MainActivity : Activity() {
         surfaceView = SurfaceView(this)
         setContentView(surfaceView)
 
-        surfaceView.holder.addCallback(object: SurfaceHolder.Callback {
+        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                startDecoder(holder.surface)
-                Thread { startTcpServer() }.start()
+                // ✅ 先开端口监听
+                Thread { startTcpServer(holder) }.start()
             }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {}
         })
     }
 
-    private fun startDecoder(surface: android.view.Surface) {
-        codec = MediaCodec.createDecoderByType("video/avc")
-        val format = MediaFormat.createVideoFormat("video/avc", 1920, 1080) // 横屏 1080p
-        codec.configure(format, surface, null, 0)
-        codec.start()
-    }
-
-    private fun startTcpServer() {
+    private fun startTcpServer(holder: SurfaceHolder) {
         val server = ServerSocket(40001)
-        println("🌐 Listening on 40001...")
+        println("🌐 Listening on port 40001...")
         val client = server.accept()
         println("✅ Client connected!")
-        val input = client.getInputStream()
-        val buffer = ByteArray(16*1024)
 
+        val input = client.getInputStream()
+        val buffer = ByteArray(16 * 1024)
         val nalBuffer = mutableListOf<Byte>()
+        var firstFrame = true
 
         try {
             while (true) {
@@ -54,15 +48,19 @@ class MainActivity : Activity() {
 
                 for (i in 0 until read) nalBuffer.add(buffer[i])
 
-                // 简单策略：每次满 16KB 或者数据足够就 feed
-                if (nalBuffer.size >= 16*1024) {
-                    feedDecoder(nalBuffer.toByteArray())
+                // 🔹 收到数据就 feed，第一次收到则创建 MediaCodec
+                if (nalBuffer.isNotEmpty()) {
+                    val data = nalBuffer.toByteArray()
+                    if (firstFrame) {
+                        // ⚡ 第一次收到数据，创建 decoder
+                        startDecoder(holder.surface, data)
+                        firstFrame = false
+                    } else {
+                        feedDecoder(data)
+                    }
                     nalBuffer.clear()
                 }
             }
-
-            if (nalBuffer.isNotEmpty()) feedDecoder(nalBuffer.toByteArray())
-
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
@@ -72,25 +70,35 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun startDecoder(surface: android.view.Surface, firstData: ByteArray) {
+        codec = MediaCodec.createDecoderByType("video/avc")
+        val format = MediaFormat.createVideoFormat("video/avc", 1920, 1080) // 横屏 1080p
+        codec!!.configure(format, surface, null, 0)
+        codec!!.start()
+        println("🎬 Decoder started")
+        feedDecoder(firstData)
+    }
+
     private fun feedDecoder(data: ByteArray) {
-        val inIndex = codec.dequeueInputBuffer(10000)
+        val c = codec ?: return
+        val inIndex = c.dequeueInputBuffer(10000)
         if (inIndex >= 0) {
-            val buffer: ByteBuffer = codec.getInputBuffer(inIndex)!!
+            val buffer: ByteBuffer = c.getInputBuffer(inIndex)!!
             buffer.clear()
             buffer.put(data)
-            codec.queueInputBuffer(inIndex, 0, data.size, System.nanoTime()/1000, 0)
+            c.queueInputBuffer(inIndex, 0, data.size, System.nanoTime() / 1000, 0)
         }
 
         val info = MediaCodec.BufferInfo()
-        var outIndex = codec.dequeueOutputBuffer(info, 0)
+        var outIndex = c.dequeueOutputBuffer(info, 0)
         while (outIndex >= 0) {
-            codec.releaseOutputBuffer(outIndex, true)
-            outIndex = codec.dequeueOutputBuffer(info, 0)
+            c.releaseOutputBuffer(outIndex, true)
+            outIndex = c.dequeueOutputBuffer(info, 0)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try { codec.stop(); codec.release() } catch (_: Exception) {}
+        try { codec?.stop(); codec?.release() } catch (_: Exception) {}
     }
 }
