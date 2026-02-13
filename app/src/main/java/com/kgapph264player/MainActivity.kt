@@ -20,7 +20,7 @@ class MainActivity : Activity() {
         private const val PORT = 40001
         private const val VIDEO_WIDTH = 1080   // screenrecord 默认横屏宽
         private const val VIDEO_HEIGHT = 2400  // screenrecord 默认竖屏高
-        private const val MAX_IDLE_TIME = 30L  // 最大空闲时间（秒），超过此时间即认为连接异常
+        private const val MAX_IDLE_TIME = 3L  // 最大空闲时间（秒），超过此时间即认为连接异常
     }
 
     private lateinit var textureView: TextureView
@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private var socket: java.net.Socket? = null
     private var lastReceivedTime = System.currentTimeMillis() // 上次接收到数据的时间
     private var serverThread: Thread? = null
+    private val executor = Executors.newSingleThreadExecutor()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,13 +84,15 @@ class MainActivity : Activity() {
                     Log.i(TAG, "Client connected")
 
                     val input = BufferedInputStream(socket!!.getInputStream())
-
                     initDecoder()
 
                     val buffer = ByteArray(200 * 1024)
                     val streamBuffer = ByteArray(500 * 1024)
                     var streamLen = 0
                     var ptsUs = 0L
+
+                    // Start a thread to monitor connection status
+                    monitorConnectionStatus()
 
                     while (true) {
                         val read = input.read(buffer)
@@ -129,16 +132,28 @@ class MainActivity : Activity() {
                             System.arraycopy(streamBuffer, offset, streamBuffer, 0, streamLen - offset)
                             streamLen -= offset
                         }
-
-                        // 检查是否连接超时，未收到数据则认为连接已断开
-                        if (System.currentTimeMillis() - lastReceivedTime > TimeUnit.SECONDS.toMillis(MAX_IDLE_TIME)) {
-                            Log.e(TAG, "TCP connection idle for too long, reconnecting...")
-                            cleanup()
-                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in server, reconnecting...", e)
                     cleanup()
+                }
+            }
+        }
+    }
+
+    // Start a background thread to monitor the connection status
+    private fun monitorConnectionStatus() {
+        executor.submit {
+            while (true) {
+                try {
+                    if (System.currentTimeMillis() - lastReceivedTime > TimeUnit.SECONDS.toMillis(MAX_IDLE_TIME)) {
+                        Log.e(TAG, "TCP connection idle for too long, reconnecting...")
+                        cleanup()
+                    }
+                    TimeUnit.SECONDS.sleep(5) // Check every 5 seconds
+                } catch (e: InterruptedException) {
+                    Log.e(TAG, "Connection monitor interrupted", e)
+                    break
                 }
             }
         }
@@ -191,5 +206,6 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         cleanup()
+        executor.shutdownNow() // Clean up executor on destroy
     }
 }
