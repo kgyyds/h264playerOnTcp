@@ -11,6 +11,7 @@ import java.io.BufferedInputStream
 import java.net.ServerSocket
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
 
@@ -19,11 +20,14 @@ class MainActivity : Activity() {
         private const val PORT = 40001
         private const val VIDEO_WIDTH = 1080   // screenrecord 默认横屏宽
         private const val VIDEO_HEIGHT = 2400  // screenrecord 默认竖屏高
+        private const val MAX_IDLE_TIME = 30L  // 最大空闲时间（秒），超过此时间即认为连接异常
     }
 
     private lateinit var textureView: TextureView
     private var codec: MediaCodec? = null
     private var socket: java.net.Socket? = null
+    private var lastReceivedTime = System.currentTimeMillis() // 上次接收到数据的时间
+    private var serverThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,7 +74,7 @@ class MainActivity : Activity() {
     }
 
     private fun startServer() {
-        Executors.newSingleThreadExecutor().execute {
+        serverThread = thread(start = true) {
             while (true) {
                 try {
                     val server = ServerSocket(PORT)
@@ -90,6 +94,8 @@ class MainActivity : Activity() {
                     while (true) {
                         val read = input.read(buffer)
                         if (read <= 0) break
+
+                        lastReceivedTime = System.currentTimeMillis()  // 更新接收数据的时间
 
                         System.arraycopy(buffer, 0, streamBuffer, streamLen, read)
                         streamLen += read
@@ -123,10 +129,15 @@ class MainActivity : Activity() {
                             System.arraycopy(streamBuffer, offset, streamBuffer, 0, streamLen - offset)
                             streamLen -= offset
                         }
+
+                        // 检查是否连接超时，未收到数据则认为连接已断开
+                        if (System.currentTimeMillis() - lastReceivedTime > TimeUnit.SECONDS.toMillis(MAX_IDLE_TIME)) {
+                            Log.e(TAG, "TCP connection idle for too long, reconnecting...")
+                            cleanup()
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in server, reconnecting...", e)
-                    // 连接断开时，清理并重连
                     cleanup()
                 }
             }
@@ -162,7 +173,6 @@ class MainActivity : Activity() {
     }
 
     private fun cleanup() {
-        // 断开连接、释放资源
         try {
             socket?.close()
             socket = null
@@ -174,10 +184,8 @@ class MainActivity : Activity() {
         codec?.release()
         codec = null
 
-        // 在断开后重新启动服务器
-        thread(start = true) {
-            startServer()
-        }
+        // 重启 TCP 监听线程
+        startServer()
     }
 
     override fun onDestroy() {
