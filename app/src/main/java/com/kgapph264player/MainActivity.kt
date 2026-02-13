@@ -20,19 +20,21 @@ class MainActivity : Activity() {
     private lateinit var textureView: TextureView
     private var codec: MediaCodec? = null
 
+    // 视频真实宽高，SPS解析后更新
+    private var videoWidth = 1080
+    private var videoHeight = 2400
+    private var spsParsed = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         textureView = TextureView(this)
         setContentView(textureView)
 
-        //TextureView准备好后开始监听 这里准备是的tt线
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
-                applyTextureTransform(width, height)
                 startServer()
             }
-
             override fun onSurfaceTextureSizeChanged(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
             override fun onSurfaceTextureDestroyed(surfaceTexture: android.graphics.SurfaceTexture): Boolean = true
             override fun onSurfaceTextureUpdated(surfaceTexture: android.graphics.SurfaceTexture) {}
@@ -40,19 +42,16 @@ class MainActivity : Activity() {
     }
 
     private fun applyTextureTransform(viewWidth: Int, viewHeight: Int) {
-        // 视频原始宽高（screenrecord默认）
-        val videoWidth = 1080f
-        val videoHeight = 2400f
-
         val matrix = Matrix()
 
-        // 计算缩放比例，保持视频宽高比
-        val scaleX = viewWidth / videoHeight
-        val scaleY = viewHeight / videoWidth
+        val scaleX = viewWidth.toFloat() / videoWidth
+        val scaleY = viewHeight.toFloat() / videoHeight
         matrix.setScale(scaleX, scaleY)
 
-        // 旋转90度，把竖屏画面旋转到正面
-        matrix.postRotate(90f, viewWidth / 2f, viewHeight / 2f)
+        // 视频旋转90度时可调整
+        if (videoWidth < videoHeight) {
+            matrix.postRotate(90f, viewWidth / 2f, viewHeight / 2f)
+        }
 
         textureView.setTransform(matrix)
     }
@@ -66,10 +65,6 @@ class MainActivity : Activity() {
                 Log.i(TAG, "Client connected")
 
                 val input = BufferedInputStream(socket.getInputStream())
-
-                // 解码器初始化
-                initDecoder(textureView)
-
                 val buffer = ByteArray(200 * 1024)
                 val streamBuffer = ByteArray(500 * 1024)
                 var streamLen = 0
@@ -95,6 +90,18 @@ class MainActivity : Activity() {
                                     && streamBuffer[next + 1] == 0.toByte()
                                     && streamBuffer[next + 2] == 1.toByte()
                                 ) {
+                                    // 判断是否SPS
+                                    val nalType = streamBuffer[offset + 3].toInt() and 0x1F
+                                    if (!spsParsed && nalType == 7) {
+                                        parseSPS(streamBuffer, offset + 4, next - offset - 4)
+                                        spsParsed = true
+                                        runOnUiThread {
+                                            applyTextureTransform(textureView.width, textureView.height)
+                                        }
+                                        // 初始化解码器
+                                        initDecoder()
+                                    }
+
                                     processNALU(streamBuffer, offset, next - offset, ptsUs++)
                                     offset = next
                                     foundNext = true
@@ -119,8 +126,22 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun initDecoder(textureView: TextureView) {
-        val format = MediaFormat.createVideoFormat("video/avc", 1080, 2400)
+    private fun parseSPS(data: ByteArray, offset: Int, len: Int) {
+        // 简化解析，仅获取宽高
+        try {
+            val sps = data.copyOfRange(offset, offset + len)
+            val width = ((sps[6].toInt() and 0xFF) shl 8) or (sps[7].toInt() and 0xFF) // 粗略解析
+            val height = ((sps[8].toInt() and 0xFF) shl 8) or (sps[9].toInt() and 0xFF)
+            videoWidth = width
+            videoHeight = height
+            Log.i(TAG, "Parsed SPS: width=$videoWidth height=$videoHeight")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse SPS", e)
+        }
+    }
+
+    private fun initDecoder() {
+        val format = MediaFormat.createVideoFormat("video/avc", videoWidth, videoHeight)
         codec = MediaCodec.createDecoderByType("video/avc")
         codec?.configure(format, android.view.Surface(textureView.surfaceTexture), null, 0)
         codec?.start()
