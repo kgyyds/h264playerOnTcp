@@ -19,6 +19,7 @@ class MainActivity : Activity() {
         private const val VIDEO_WIDTH = 1080
         private const val VIDEO_HEIGHT = 2400
         private const val MAX_IDLE_TIME = 3L
+        private const val AUDIO_PORT = 40002
     }
 
     private lateinit var textureView: TextureView
@@ -27,6 +28,7 @@ class MainActivity : Activity() {
     private var lastReceivedTime = System.currentTimeMillis()
     private var tcpThread: Thread? = null
     private var isServerRunning = false
+    private val audioStreamReceiver = AudioStreamReceiver(port = AUDIO_PORT, mode = AudioStreamReceiver.AudioMode.OPUS)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +40,7 @@ class MainActivity : Activity() {
             override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                 applyTextureTransform(width, height)
                 startServer()
+                audioStreamReceiver.start()
             }
             override fun onSurfaceTextureSizeChanged(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {}
             override fun onSurfaceTextureDestroyed(surfaceTexture: android.graphics.SurfaceTexture): Boolean = true
@@ -236,10 +239,22 @@ class MainActivity : Activity() {
         lastReceivedTime = System.currentTimeMillis()
     }
 
+
+    override fun onPause() {
+        super.onPause()
+        audioStreamReceiver.pause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        audioStreamReceiver.resume()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         isServerRunning = false
         fullCleanup()
+        audioStreamReceiver.stop()
         try {
             tcpThread?.interrupt()
         } catch (ignored: Exception) {
