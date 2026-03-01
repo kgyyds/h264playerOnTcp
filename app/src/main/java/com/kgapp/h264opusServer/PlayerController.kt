@@ -2,6 +2,13 @@ package com.kgapp.h264opusServer
 
 import android.util.Log
 import android.view.Surface
+import com.kgapp.h264opusServer.control.AndroidKeyCode
+import com.kgapp.h264opusServer.control.ControlClient
+import com.kgapp.h264opusServer.control.DeviceFrameSize
+import com.kgapp.h264opusServer.control.KeyAction
+import com.kgapp.h264opusServer.control.encodeInjectKeycode
+import com.kgapp.h264opusServer.control.encodeInjectTouch
+import com.kgapp.h264opusServer.control.mapViewToVideo
 import com.kgapp.h264opusServer.decoder.H264VideoDecoder
 import com.kgapp.h264opusServer.decoder.OpusAudioDecoder
 import com.kgapp.h264opusServer.network.TcpStreamServer
@@ -18,6 +25,7 @@ class PlayerController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tcpServer: TcpStreamServer? = null
     private var currentSurface: Surface? = null
+    private val controlClient = ControlClient()
 
     private val videoDecoder = H264VideoDecoder(
         onVideoSizeChanged = { width, height ->
@@ -29,9 +37,10 @@ class PlayerController {
     private val _videoSize = MutableStateFlow(16 to 9)
     val videoSize: StateFlow<Pair<Int, Int>> = _videoSize.asStateFlow()
 
-    fun start(videoPort: Int, audioPort: Int) {
-        Log.d(TAG, "start called videoPort=$videoPort audioPort=$audioPort")
+    fun start(videoPort: Int, audioPort: Int, controlPort: Int) {
+        Log.d(TAG, "start called videoPort=$videoPort audioPort=$audioPort controlPort=$controlPort")
         stopServerOnly()
+        controlClient.connect(controlPort)
 
         scope.launch {
             audioDecoder.start()
@@ -44,6 +53,46 @@ class PlayerController {
             ).also { it.start(scope) }
         }
     }
+
+    fun onRenderTouch(action: Int, x: Float, y: Float, viewWidth: Int, viewHeight: Int, pressure: Float) {
+        val (videoWidth, videoHeight) = _videoSize.value
+        val frame = DeviceFrameSize(videoWidth, videoHeight)
+        val point = mapViewToVideo(
+            vx = x,
+            vy = y,
+            viewW = viewWidth,
+            viewH = viewHeight,
+            videoW = videoWidth,
+            videoH = videoHeight
+        ) ?: return
+
+        controlClient.send(
+            encodeInjectTouch(
+                action = action,
+                pointerId = 0L,
+                p = point,
+                frame = frame,
+                pressure = pressure
+            )
+        )
+    }
+
+    fun sendKeyTap(keycode: Int) {
+        controlClient.send(encodeInjectKeycode(action = KeyAction.DOWN, keycode = keycode))
+        controlClient.send(encodeInjectKeycode(action = KeyAction.UP, keycode = keycode))
+    }
+
+    fun sendPower() = sendKeyTap(AndroidKeyCode.POWER)
+
+    fun sendVolumeUp() = sendKeyTap(AndroidKeyCode.VOLUME_UP)
+
+    fun sendVolumeDown() = sendKeyTap(AndroidKeyCode.VOLUME_DOWN)
+
+    fun sendBack() = sendKeyTap(AndroidKeyCode.BACK)
+
+    fun sendHome() = sendKeyTap(AndroidKeyCode.HOME)
+
+    fun sendAppSwitch() = sendKeyTap(AndroidKeyCode.APP_SWITCH)
 
     fun attachSurface(surface: Surface) {
         Log.d(TAG, "attachSurface")
@@ -60,6 +109,7 @@ class PlayerController {
     fun release() {
         Log.d(TAG, "release all resources")
         stopServerOnly()
+        controlClient.close()
         scope.launch {
             videoDecoder.release()
             audioDecoder.release()
