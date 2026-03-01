@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "APDNOS"
+rootProject.name = "h264opusServer"
 include(":app")

@@ -12,3 +12,6 @@
 *.jar
 *.aar
 *.bin
+
+local.properties
+.kotlin/
