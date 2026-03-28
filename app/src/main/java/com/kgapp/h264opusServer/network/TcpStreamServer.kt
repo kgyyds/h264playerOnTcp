@@ -9,6 +9,7 @@ import java.io.BufferedInputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.Collections
 
 class TcpStreamServer(
     private val videoPort: Int,
@@ -19,6 +20,10 @@ class TcpStreamServer(
     private val onVideoConnected: (Boolean) -> Unit,
     private val onControlOutput: (OutputStream?) -> Unit,
 ) {
+    private val videoClients = Collections.synchronizedSet(mutableSetOf<Socket>())
+    private val audioClients = Collections.synchronizedSet(mutableSetOf<Socket>())
+    private val controlClients = Collections.synchronizedSet(mutableSetOf<Socket>())
+
     private var videoServerSocket: ServerSocket? = null
     private var audioServerSocket: ServerSocket? = null
     private var videoAcceptJob: Job? = null
@@ -62,6 +67,10 @@ class TcpStreamServer(
                 val socket = server.accept()
                 Log.d(TAG, "$type connection established from ${socket.inetAddress.hostAddress}")
                 if (type == "video") onVideoConnected(true)
+                when (type) {
+                    "video" -> videoClients.add(socket)
+                    "audio" -> audioClients.add(socket)
+                }
                 handleClient(type, socket, onBytes)
             }
         } catch (ex: Exception) {
@@ -88,6 +97,10 @@ class TcpStreamServer(
             } catch (ex: Exception) {
                 Log.d(TAG, "$type client disconnected: ${ex.message}")
             } finally {
+                when (type) {
+                    "video" -> videoClients.remove(socket)
+                    "audio" -> audioClients.remove(socket)
+                }
                 if (type == "video") onVideoConnected(false)
             }
         }.start()
@@ -101,6 +114,7 @@ class TcpStreamServer(
             while (true) {
                 val socket = server.accept()
                 Log.d(TAG, "control connection established from ${socket.inetAddress.hostAddress}")
+                controlClients.add(socket)
                 Thread {
                     socket.use { controlSocket ->
                         onControlOutput(controlSocket.getOutputStream())
@@ -120,6 +134,7 @@ class TcpStreamServer(
                         } catch (_: Exception) {
                             // ignore
                         } finally {
+                            controlClients.remove(controlSocket)
                             onControlOutput(null)
                             Log.d(TAG, "control client disconnected")
                         }
@@ -129,6 +144,24 @@ class TcpStreamServer(
         } catch (ex: Exception) {
             Log.d(TAG, "control server stopped: ${ex.message}")
             onControlOutput(null)
+        }
+    }
+
+    fun disconnectAllClients() {
+        Log.d(TAG, "disconnect all active clients")
+        closeAllClients(videoClients)
+        closeAllClients(audioClients)
+        closeAllClients(controlClients)
+        onVideoConnected(false)
+        onControlOutput(null)
+    }
+
+    private fun closeAllClients(clients: MutableSet<Socket>) {
+        synchronized(clients) {
+            clients.toList().forEach { socket ->
+                runCatching { socket.close() }
+            }
+            clients.clear()
         }
     }
 
@@ -143,6 +176,9 @@ class TcpStreamServer(
         runCatching { videoServerSocket?.close() }
         runCatching { audioServerSocket?.close() }
         runCatching { controlServerSocket?.close() }
+        closeAllClients(videoClients)
+        closeAllClients(audioClients)
+        closeAllClients(controlClients)
         videoServerSocket = null
         audioServerSocket = null
         controlServerSocket = null
