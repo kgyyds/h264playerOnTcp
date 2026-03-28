@@ -106,6 +106,14 @@ class PlayerController {
 
     fun sendAppSwitch() = sendKeyTap(AndroidKeyCode.APP_SWITCH)
 
+    fun disconnectAllConnections() {
+        Log.d(TAG, "disconnect all active tcp connections")
+        tcpServer?.disconnectAllClients()
+        hasVideoConnection.set(false)
+        hasControlConnection.set(false)
+        controlSender.bindOutputStream(null)
+    }
+
     fun attachSurface(surface: Surface) {
         Log.d(TAG, "attachSurface")
         currentSurface = surface

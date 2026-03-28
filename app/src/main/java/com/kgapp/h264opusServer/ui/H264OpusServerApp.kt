@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -68,6 +69,9 @@ fun H264OpusServerApp(controller: PlayerController) {
             TopAppBar(
                 title = { Text("H264 Opus TCP Player") },
                 actions = {
+                    IconButton(onClick = { controller.disconnectAllConnections() }) {
+                        Icon(Icons.Default.LinkOff, contentDescription = "disconnect all")
+                    }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "settings")
                     }
